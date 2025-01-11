@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Contact, ReplyKeyboardMarkup, KeyboardButton
@@ -60,7 +61,8 @@ async def handle_borrow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     "בואו נתחיל! 📸 צלם תמונה של הפריט שברצונך להשאיל."
 )
 
-# פונקציה שמטפלת בקבלת תמונה
+# פ
+# ונקציה שמטפלת בקבלת תמונה
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
     if user_id in users_data and users_data[user_id].get("step") == "borrow_started":
@@ -81,9 +83,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = update.message.from_user.id
     step = users_data.get(user_id, {}).get("step")
     if step == "photo_received":
-        users_data[user_id]["description"] = update.message.text
+        # Store the description as item_description
+        users_data[user_id]["item_description"] = update.message.text
+
+        # Default the borrow_date to today's date
+        today_date = datetime.now().strftime("%d/%m/%Y")
+        users_data[user_id]["borrow_date"] = today_date
+
         save_users_data()
-        logger.info(f"User {user_id} added a description.")
+        logger.info(f"User {user_id} added a description and borrow date.")
         keyboard = [
             [InlineKeyboardButton("📅 אחת לשבוע", callback_data="weekly")],
             [InlineKeyboardButton("📆 אחת לשבועיים", callback_data="biweekly")],
@@ -92,6 +100,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
+            "✔️ התיאור נשמר בהצלחה! \n\n"
+            "עכשיו נוכל להמשיך לשלב הבא 😊\n"
             "⏰ באיזו תדירות תרצה שנשלח תזכורות?", reply_markup=reply_markup
         )
     elif step == "borrow_started":
@@ -102,77 +112,96 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text(
             "⚠️ יש להתחיל את התהליך על ידי לחיצה על 'השאלת פריט'."
         )
+
       
 # שלב 3 - תדירות שליחת ההודעה
 async def handle_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="⚠️ לא התקבלה הודעה תקינה. נסה שוב מאוחר יותר."
+    # Check if this is a callback query
+    if update.callback_query:
+        callback_data = update.callback_query.data
+        user_id = update.callback_query.from_user.id
+
+        if user_id in users_data:
+            users_data[user_id]["frequency"] = callback_data
+            save_users_data()
+
+            # Mapping frequency to a nice readable format
+            frequency_map = {
+            "weekly": "אחת לשבוע",
+            "biweekly": "אחת לשבועיים",
+            "monthly": "אחת לחודש",
+            "now": "עכשיו"
+            }
+                # Get the user-selected frequency
+            selected_frequency = frequency_map.get(callback_data, "לא נבחרה תדירות")
+            # Notify user that the frequency has been saved
+            await update.callback_query.answer("✔️ התדירות נשמרה בהצלחה!")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+            text=(
+                    "✔️ התדירות נשמרה בהצלחה! \n"
+                    f"נבחרה תדירות: {selected_frequency}.\n\n"
+                    "עכשיו נוכל להמשיך לשלב הבא 😊\n"
+                    "אנא הוסף איש קשר לצ'ט כדי שנוכל לשלוח לו את תזכורות ההחזרה."
+                )  
+            ) 
+            
+         
+            # Update the step
+            users_data[user_id]["step"] = "awaiting_contact"
+            save_users_data()
+        else:
+            await update.callback_query.answer("⚠️ יש להתחיל את התהליך על ידי בחירת תדירות התזכורות.")
+        return
+
+    # Handle fallback for messages (if necessary)
+    if update.message:
+        await update.message.reply_text(
+            "⚠️ לא התקבלה הודעה תקינה. נסה שוב מאוחר יותר."
         )
-        return
-
-    user_id = update.message.from_user.id
-
-    # בדיקה אם יש מידע עבור המשתמש
-    if user_id in users_data:
-        user_data = users_data[user_id]
-        
-        # שמירת תדירות ההודעה
-        frequency = update.message.text
-        users_data[user_id]["frequency"] = frequency
-        save_users_data()
-
-        # הודעה למשתמש שתדירות ההודעה נשמרה
-        await update.message.reply_text("✔️ התדירות נשמרה בהצלחה! כעת עליך להוסיף איש קשר לצ'ט.")
-        
-        # עדכון השלב
-        users_data[user_id]["step"] = "awaiting_contact"
-        save_users_data()
-
-        return
-    else:
-        await update.message.reply_text("⚠️ יש להתחיל את התהליך על ידי בחירת תדירות התזכורות.")
 
 # שלב 4 - הוספת איש קשר לצ'ט
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
 
-    # בדיקה אם יש מידע עבור המשתמש
+    # Check if there is user data
     if user_id in users_data:
         user_data = users_data[user_id]
 
-        # בדיקה אם המשתמש בשלב המתאים
+        # Ensure the user is at the correct step
         if user_data.get("step") == "awaiting_contact":
             contact = update.message.contact
 
             if contact and contact.phone_number:
-                # שמירת מספר הטלפון
-                users_data[user_id]["contact_phone"] = contact.phone_number
+                # Normalize the phone number
+                phone_number = contact.phone_number
+                if phone_number.startswith("05"):
+                    phone_number = "+972" + phone_number[1:]
+
+                # Save the contact phone number
+                users_data[user_id]["contact_phone"] = phone_number
                 users_data[user_id]["step"] = "contact_saved"
                 save_users_data()
-                logger.info(f"User {user_id} shared contact: {contact.phone_number}")
+                logger.info(f"User {user_id} shared contact: {phone_number}")
 
-                # יצירת הודעת תזכורת
+                # Retrieve item_description and borrow_date from user data
+                item_description = user_data["item_description"]
+                borrow_date = user_data["borrow_date"]
+
+                # Create the reminder message
                 reminder_message = (
-                    f"שלום 🌟\n\n"
-                    f"רק רצינו להזכיר לך על הפריט '{item_description}' "
-                    f"שהושאל בתאריך {borrow_date}. "
-                    f"בבקשה ודא שהפריט הוחזר בזמן שנקבע. "
-                    f"אם עדיין לא, תוכל לתזמן תזכורת נוספת.\n\n"
-                    f"נשמח לעזור בכל שאלה!\n"
-                    f"📚 צוות הבוט שלך"
+                    f"שלום\n\n"
+                    f"רצינו להזכיר לך להחזיר את הפריט '{item_description}' "
+                    f"שהושאל בתאריך {borrow_date}.\n"
+                    f"נשמח לעזור בכל שאלה!\n\n"
+                    f"צוות במקומי"
                 )
 
-                # הודעה למשתמש שהמספר נשמר בהצלחה
-                await update.message.reply_text("✔️ מספר הטלפון נשמר בהצלחה! נמשיך בתהליך התזכורות.")
-                
-                # המשך בתהליך התזכורת
-                # שימוש בפונקציה המתאימה כדי להמשיך את התהליך (לדוגמה, handle_frequency)
-                await handle_frequency(update, context)
+                # Notify the user that the phone number was saved successfully
+                await update.message.reply_text("✔️ מספר הטלפון נשמר בהצלחה! בעוד מספר רגעים נאשר את שליחת ההודעה בהצלחה, תודה על סבלנותך.")
 
-                # שליחת הודעה בוואטסאפ בפונקציה נפרדת
-                await send_whatsapp_reminder(contact.phone_number, reminder_message)
+                # Send the WhatsApp reminder
+                await send_whatsapp_reminder(context, update.effective_chat.id, phone_number, reminder_message)
                 return
             else:
                 await update.message.reply_text("⚠️ לא ניתן היה לזהות מספר טלפון. נסה שוב לשתף איש קשר.")
@@ -180,20 +209,21 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             logger.warning(f"User {user_id} tried sharing contact but is not in awaiting_contact step.")
     
-    # אם המשתמש לא נמצא במצב המתאים או אין מידע
+    # If the user is not in the correct step or there is no user data
     await update.message.reply_text("⚠️ יש להתחיל את התהליך על ידי בחירת תדירות התזכורות.")
 
-# שלב 5 - שליחת הודעת התזכורת למספר של איש הקשר דרך ווצאפ ווב
-async def send_whatsapp_reminder(context: ContextTypes.DEFAULT_TYPE, contact_phone: str, reminder_message: str) -> None:
-    success = send_whatsapp_message(contact_phone, reminder_message, delay_minutes=minutes_delay)
+# Send WhatsApp reminder function
+async def send_whatsapp_reminder(context: ContextTypes.DEFAULT_TYPE, chat_id: int, phone_number: str, reminder_message: str) -> None:
+    # This assumes send_whatsapp_message is defined elsewhere
+    success = send_whatsapp_message(phone_number, reminder_message, delay_minutes=minutes_delay)
     if success:
         await context.bot.send_message(
-            chat_id=context.job.context,
+            chat_id=chat_id,
             text="✔️ הודעת תזכורת נשלחה בהצלחה דרך WhatsApp."
         )
     else:
         await context.bot.send_message(
-            chat_id=context.job.context,
+            chat_id=chat_id,
             text="⚠️ הייתה בעיה בשליחת הודעת התזכורת דרך WhatsApp. נסה שוב מאוחר יותר."
         )
 
