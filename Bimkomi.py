@@ -33,7 +33,7 @@ def init_db():
         logger.info("Database initialized successfully.")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
-    db_path = "C:\Users\Administrator\source\repos\Bimkomi\borrow_reminders.db"
+    db_path = r"C:\Users\Administrator\source\repos\Bimkomi\borrow_reminders.db"
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS items (
@@ -114,6 +114,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "⚠️ יש להתחיל את התהליך על ידי לחיצה על 'השאלת פריט'."
         )
 
+# Update handle_frequency function
 async def handle_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         callback_data = update.callback_query.data
@@ -139,6 +140,7 @@ async def handle_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         context.user_data[user_id]["step"] = "awaiting_contact"
 
+# Update handle_contact function
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
     if context.user_data[user_id].get("step") == "awaiting_contact":
@@ -162,6 +164,10 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"צוות במקומי"
             )
             await send_whatsapp_reminder(context, update.effective_chat.id, phone_number, reminder_message)
+
+            # Update step after the contact handling
+            context.user_data[user_id]["step"] = "completed"
+
 
 async def send_whatsapp_reminder(context: ContextTypes.DEFAULT_TYPE, chat_id: int, phone_number: str, reminder_message: str) -> None:
     success = send_whatsapp_message(phone_number, reminder_message, delay_minutes=1)
@@ -196,6 +202,7 @@ application = Application.builder().token(API_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📚 השאלת פריט$"), handle_borrow))
 application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 application.add_handler(CallbackQueryHandler(handle_frequency))
 application
