@@ -130,15 +130,30 @@ async def handle_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         }
         selected_frequency = frequency_map.get(callback_data, "לא נבחרה תדירות")
         await update.callback_query.answer("✔️ התדירות נשמרה בהצלחה!")
+        
+        reminder_message = (
+            f"שלום\n\n"
+            f"רצינו להזכיר לך להחזיר את הפריט '{context.user_data[user_id]['item_description']}' "
+            f"שהושאל בתאריך {context.user_data[user_id]['borrow_date']}.\n"
+            f"נשמח לעזור בכל שאלה!\n\n"
+            f"צוות במקומי"
+        )
+        
+        # Send frequency selection confirmation with reminder message
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=(
                 "✔️ התדירות נשמרה בהצלחה! \n"
                 f"נבחרה תדירות: {selected_frequency}.\n\n"
-                "אנא הוסף איש קשר לצ'ט כדי שנוכל לשלוח לו את תזכורות ההחזרה."
+                "ההודעה שתשלח לאיש הקשר:\n" 
+                f"{reminder_message}\n\n"
+                "אנא הוסף איש קשר לצ'ט כדי שנוכל לשלוח לו את תזכורות ההחזרה.\n\n"      
             )
         )
+        
+        # Proceed to next step
         context.user_data[user_id]["step"] = "awaiting_contact"
+
 
 # Update handle_contact function
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -163,10 +178,23 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"נשמח לעזור בכל שאלה!\n\n"
                 f"צוות במקומי"
             )
+                        # Notify user that the contact has been added and reminder will be sent
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=(
+                    "✔️ איש הקשר נשמר בהצלחה!\n"
+                    "ההודעה תישלח לאיש הקשר בהתאם לתדירות שנבחרה.\n"
+                    f"נשלח תזכורת ל-{phone_number} בעת הצורך."
+                )
+            )
+            
+            # Send WhatsApp reminder
             await send_whatsapp_reminder(context, update.effective_chat.id, phone_number, reminder_message)
 
             # Update step after the contact handling
             context.user_data[user_id]["step"] = "completed"
+
+
 
 
 async def send_whatsapp_reminder(context: ContextTypes.DEFAULT_TYPE, chat_id: int, phone_number: str, reminder_message: str) -> None:
