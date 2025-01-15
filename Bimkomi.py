@@ -4,7 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Contact
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import sqlite3
 import pywhatkit
-#
+
 # Telegram API Token
 API_TOKEN = "7722019620:AAEYueraVyfFRFQMuY5DBFlNJcVpIwD_iPM"
 
@@ -26,33 +26,31 @@ def init_db():
             item_description TEXT NOT NULL,
             borrow_date TEXT NOT NULL,
             contact_phone TEXT NOT NULL,
-            frequency TEXT NOT NULL
+            frequency TEXT NOT NULL,
+            photo_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'borrowed'
         )''')
         conn.commit()
         conn.close()
         logger.info("Database initialized successfully.")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
-    db_path = r"C:\Users\Administrator\source\repos\Bimkomi\borrow_reminders.db"
-    conn = sqlite3.connect(db_path)
+
+# Add item to the database
+def add_item(user_id, item_description, borrow_date, contact_phone, frequency, photo_id):
+    conn = sqlite3.connect("borrow_reminders.db")
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        item_description TEXT NOT NULL,
-        borrow_date TEXT NOT NULL,
-        contact_phone TEXT NOT NULL,
-        frequency TEXT NOT NULL
-    )''')
+    cursor.execute('''INSERT INTO items (user_id, item_description, borrow_date, contact_phone, frequency, photo_id, status)
+                      VALUES (?, ?, ?, ?, ?, ?, ?)''', (user_id, item_description, borrow_date, contact_phone, frequency, photo_id, 'borrowed'))
     conn.commit()
     conn.close()
 
-# Add item to the database
-def add_item(user_id, item_description, borrow_date, contact_phone, frequency):
+# Update item status (borrowed or returned)
+def update_item_status(user_id, item_description, returned=False):
     conn = sqlite3.connect("borrow_reminders.db")
     cursor = conn.cursor()
-    cursor.execute('''INSERT INTO items (user_id, item_description, borrow_date, contact_phone, frequency)
-                      VALUES (?, ?, ?, ?, ?)''', (user_id, item_description, borrow_date, contact_phone, frequency))
+    status = "returned" if returned else "borrowed"
+    cursor.execute('''UPDATE items SET status = ? WHERE user_id = ? AND item_description = ?''', (status, user_id, item_description))
     conn.commit()
     conn.close()
 
@@ -60,7 +58,7 @@ def add_item(user_id, item_description, borrow_date, contact_phone, frequency):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
         [KeyboardButton("📚 השאלת פריט")],
-        [KeyboardButton("🔍 פרט הוחזר")]
+        [KeyboardButton("🔍 פריט הוחזר")]
     ]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
@@ -71,10 +69,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_borrow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
     context.user_data[user_id] = {"step": "borrow_started"}
+    
+    # שלח הודעה עם טקסט ומקש
     await update.message.reply_text(
         "✨ מעולה! בחרת באפשרות 'השאלת פריט'.\n"
         "בואו נתחיל! 📸 צלם תמונה של הפריט שברצונך להשאיל."
     )
+
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
@@ -114,48 +115,52 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "⚠️ יש להתחיל את התהליך על ידי לחיצה על 'השאלת פריט'."
         )
 
-# Update handle_frequency function
+# Handle frequency selection
 async def handle_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         callback_data = update.callback_query.data
         user_id = update.callback_query.from_user.id
-
-        context.user_data[user_id]["frequency"] = callback_data
-
-        frequency_map = {
-            "weekly": "אחת לשבוע",
-            "biweekly": "אחת לשבועיים",
-            "monthly": "אחת לחודש",
-            "now": "עכשיו"
-        }
-        selected_frequency = frequency_map.get(callback_data, "לא נבחרה תדירות")
-        await update.callback_query.answer("✔️ התדירות נשמרה בהצלחה!")
         
-        reminder_message = (
-            f"שלום\n\n"
-            f"רצינו להזכיר לך להחזיר את הפריט '{context.user_data[user_id]['item_description']}' "
-            f"שהושאל בתאריך {context.user_data[user_id]['borrow_date']}.\n"
-            f"נשמח לעזור בכל שאלה!\n\n"
-            f"צוות במקומי"
-        )
-        
-        # Send frequency selection confirmation with reminder message
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=(
-                "✔️ התדירות נשמרה בהצלחה! \n"
-                f"נבחרה תדירות: {selected_frequency}.\n\n"
-                "ההודעה שתשלח לאיש הקשר:\n" 
-                f"{reminder_message}\n\n"
-                "אנא הוסף איש קשר לצ'ט כדי שנוכל לשלוח לו את תזכורות ההחזרה.\n\n"      
+        # בדוק אם המשתמש עבר את כל השלבים הדרושים לפני שמאחסן את המידע
+        if user_id in context.user_data and "step" in context.user_data[user_id] and context.user_data[user_id]["step"] == "photo_received":
+            context.user_data[user_id]["frequency"] = callback_data
+
+            frequency_map = {
+                "weekly": "אחת לשבוע",
+                "biweekly": "אחת לשבועיים",
+                "monthly": "אחת לחודש",
+                "now": "עכשיו"
+            }
+            selected_frequency = frequency_map.get(callback_data, "לא נבחרה תדירות")
+            await update.callback_query.answer("✔️ התדירות נשמרה בהצלחה!")
+            
+            reminder_message = (
+                f"שלום\n\n"
+                f"רצינו להזכיר לך להחזיר את הפריט '{context.user_data[user_id]['item_description']}' "
+                f"שהושאל בתאריך {context.user_data[user_id]['borrow_date']}.\n"
+                f"נשמח לעזור בכל שאלה!\n\n"
+                f"צוות במקומי"
             )
-        )
-        
-        # Proceed to next step
-        context.user_data[user_id]["step"] = "awaiting_contact"
+            
+            # Send frequency selection confirmation with reminder message
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=( 
+                    "✔️ התדירות נשמרה בהצלחה! \n"
+                    f"נבחרה תדירות: {selected_frequency}.\n\n"
+                    "ההודעה שתשלח לאיש הקשר:\n" 
+                    f"{reminder_message}\n\n"
+                    "אנא הוסף איש קשר לצ'ט כדי שנוכל לשלוח לו את תזכורות ההחזרה.\n\n"
+                )
+            )
+            
+            # Proceed to next step
+            context.user_data[user_id]["step"] = "awaiting_contact"
+        else:
+            # אם המשתמש לא עבר את השלבים הקודמים
+            await update.callback_query.answer("⚠️ עליך להשלים את שלב התמונה והתיאור לפני קביעת תדירות.")
 
-
-# Update handle_contact function
+# Handle the contact info submission
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
     if context.user_data[user_id].get("step") == "awaiting_contact":
@@ -168,8 +173,9 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             item_description = context.user_data[user_id]["item_description"]
             borrow_date = context.user_data[user_id]["borrow_date"]
             frequency = context.user_data[user_id]["frequency"]
+            photo_id = context.user_data[user_id]["photo"]
 
-            add_item(user_id, item_description, borrow_date, phone_number, frequency)
+            add_item(user_id, item_description, borrow_date, phone_number, frequency, photo_id)
 
             reminder_message = (
                 f"שלום\n\n"
@@ -178,14 +184,13 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"נשמח לעזור בכל שאלה!\n\n"
                 f"צוות במקומי"
             )
-                        # Notify user that the contact has been added and reminder will be sent
+
+            # Send confirmation and reminder message
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=(
-                    "✔️ איש הקשר נשמר בהצלחה!\n"
-                    "ההודעה תישלח לאיש הקשר בהתאם לתדירות שנבחרה.\n"
-                    f"נשלח תזכורת ל-{phone_number} בעת הצורך."
-                )
+                text=("✔️ איש הקשר נשמר בהצלחה!\n"
+                      "ההודעה תישלח לאיש הקשר בהתאם לתדירות שנבחרה.\n"
+                      f"נשלח תזכורת ל-{phone_number} בעת הצורך.")
             )
             
             # Send WhatsApp reminder
@@ -194,49 +199,76 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # Update step after the contact handling
             context.user_data[user_id]["step"] = "completed"
 
+# Handle item return (Upload item photo)
+async def return_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.message.from_user.id
+    context.user_data[user_id]["step"] = "return_started"
 
+    # Search for borrowed items
+    conn = sqlite3.connect("borrow_reminders.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT photo_id, item_description FROM items WHERE user_id = ? AND status = 'borrowed'", (user_id,))
+    item = cursor.fetchone()
+    conn.close()
 
-
-async def send_whatsapp_reminder(context: ContextTypes.DEFAULT_TYPE, chat_id: int, phone_number: str, reminder_message: str) -> None:
-    success = send_whatsapp_message(phone_number, reminder_message, delay_minutes=1)
-    if success:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="✔️ הודעת תזכורת נשלחה בהצלחה דרך WhatsApp."
+    if item:
+        photo_id, item_description = item
+        await update.message.reply_text(
+            f"👀 הנה התמונה של הפריט '{item_description}' שהשאלת:\n"
+            "אנא העלה את התמונה של הפריט שהחזרת."
         )
+        await update.message.reply_photo(photo_id)
     else:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="⚠️ הייתה בעיה בשליחת הודעת התזכורת דרך WhatsApp. נסה שוב מאוחר יותר."
+        await update.message.reply_text(
+            "⚠️ לא הצלחנו למצוא את הפריט שהשאלת. ייתכן שלא שמרנו את התמונה. אנא שלח לנו את שם הפריט שהחזרת."
         )
 
-def send_whatsapp_message(phone_number: str, message: str, delay_minutes: int = 1) -> bool:
-    now = datetime.now()
-    send_time = now + timedelta(minutes=delay_minutes)
-    hour, minute = send_time.hour, send_time.minute
-    try:
-        pywhatkit.sendwhatmsg(phone_number, message, hour, minute)
-        logger.info(f"WhatsApp message sent to {phone_number} at {hour}:{minute}.")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to send WhatsApp message to {phone_number}: {e}")
-        return False
 
-# Initialize the database
-init_db()
+# Handle the photo upload for item return
+async def handle_photo_for_return(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.message.from_user.id
+    if context.user_data[user_id].get("step") == "return_started":
+        uploaded_photo_id = update.message.photo[-1].file_id
 
-# Set up the bot
-application = Application.builder().token(API_TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & filters.Regex("^📚 השאלת פריט$"), handle_borrow))
-application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-application.add_handler(CallbackQueryHandler(handle_frequency))
-application
+        # Compare uploaded photo with saved item photo
+        conn = sqlite3.connect("borrow_reminders.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT item_description FROM items WHERE user_id = ? AND photo_id = ?", (user_id, uploaded_photo_id))
+        item = cursor.fetchone()
+        conn.close()
 
+        if item:
+            item_description = item[0]
+            update_item_status(user_id, item_description, returned=True)
 
-# Start the bot
-if __name__ == "__main__":
-    logger.info("Bot is starting...")
+            await update.message.reply_text(
+                f"✔️ הפריט '{item_description}' הוחזר בהצלחה!\n\n"
+                "תודה על העדכון! תזכורות ההחזרה עבור פריט זה לא יישלחו יותר. אם יש פריטים אחרים להחזיר, "
+                "תוכל לשלוח הודעה נוספת בכל עת."
+            )
+        else:
+            await update.message.reply_text(
+                "⚠️ לא הצלחנו לזהות את הפריט שהתמונה שלך תואמת אליו. אנא וודא שהעלית את התמונה הנכונה."
+            )
+
+# WhatsApp reminder
+async def send_whatsapp_reminder(context, chat_id, phone_number, reminder_message):
+    pywhatkit.sendwhatmsg_instantly(phone_number, reminder_message, 10, True)
+
+# Main function to run the bot
+def main():
+    init_db()
+
+    application = Application.builder().token(API_TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_handler(MessageHandler(filters.TEXT, handle_text))
+    application.add_handler(CallbackQueryHandler(handle_frequency))
+    application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+
     application.run_polling()
+
+if __name__ == "__main__":
+    main()
