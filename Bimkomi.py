@@ -165,17 +165,27 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.message.from_user.id
     if context.user_data[user_id].get("step") == "awaiting_contact":
         contact = update.message.contact
+        
         if contact and contact.phone_number:
             phone_number = contact.phone_number
             if phone_number.startswith("05"):
                 phone_number = "+972" + phone_number[1:]
-
+            # Send confirmation and reminder message
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=("✔️ איש הקשר נשמר בהצלחה!\n"
+                      "ההודעה תישלח לאיש הקשר בהתאם לתדירות שבחרת.\n"
+                      )
+            )
             item_description = context.user_data[user_id]["item_description"]
             borrow_date = context.user_data[user_id]["borrow_date"]
             frequency = context.user_data[user_id]["frequency"]
             photo_id = context.user_data[user_id]["photo"]
 
-            add_item(user_id, item_description, borrow_date, phone_number, frequency, photo_id)
+            add_item(user_id, item_description
+                     , borrow_date, phone_number, frequency, photo_id)
+            print(f"Inserting into items: user_id={user_id}, item_description={item_description}, "
+            f"borrow_date={borrow_date}, contact_phone={phone_number}, frequency={frequency}, photo_id={photo_id}")
 
             reminder_message = (
                 f"שלום\n\n"
@@ -184,15 +194,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"נשמח לעזור בכל שאלה!\n\n"
                 f"צוות במקומי"
             )
-
-            # Send confirmation and reminder message
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=("✔️ איש הקשר נשמר בהצלחה!\n"
-                      "ההודעה תישלח לאיש הקשר בהתאם לתדירות שנבחרה.\n"
-                      f"נשלח תזכורת ל-{phone_number} בעת הצורך.")
-            )
-            
+  
             # Send WhatsApp reminder
             await send_whatsapp_reminder(context, update.effective_chat.id, phone_number, reminder_message)
 
@@ -202,8 +204,14 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # Handle item return (Upload item photo)
 async def return_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.message.from_user.id
+    await update.message.reply_text(
+            f"👀 "
+            "אנא העלה את התמונה של הפריט שהחזרת."
+        )
     context.user_data[user_id]["step"] = "return_started"
-
+    photo_id, item_description = item
+        
+    
     # Search for borrowed items
     conn = sqlite3.connect("borrow_reminders.db")
     cursor = conn.cursor()
@@ -246,6 +254,7 @@ async def handle_photo_for_return(update: Update, context: ContextTypes.DEFAULT_
                 "תודה על העדכון! תזכורות ההחזרה עבור פריט זה לא יישלחו יותר. אם יש פריטים אחרים להחזיר, "
                 "תוכל לשלוח הודעה נוספת בכל עת."
             )
+        
         else:
             await update.message.reply_text(
                 "⚠️ לא הצלחנו לזהות את הפריט שהתמונה שלך תואמת אליו. אנא וודא שהעלית את התמונה הנכונה."
@@ -262,10 +271,12 @@ def main():
     application = Application.builder().token(API_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.Regex("📚 השאלת פריט"), handle_borrow))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.TEXT, handle_text))
     application.add_handler(CallbackQueryHandler(handle_frequency))
     application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+    application.add_handler(MessageHandler(filters.Regex("🔍 פריט הוחזר"), return_item))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     application.run_polling()
