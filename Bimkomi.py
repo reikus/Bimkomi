@@ -4,10 +4,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Contact
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import sqlite3
 import pywhatkit
+import os
+from telegram import Bot
+
+
 
 # Telegram API Token
-API_TOKEN = "7722019620:AAEYueraVyfFRFQMuY5DBFlNJcVpIwD_iPM"
-
+API_TOKEN = os.getenv("7722019620:AAEYueraVyfFRFQMuY5DBFlNJcVpIwD_iPM")
+bot = Bot(token=API_TOKEN)
+bot.set_webhook(f"https://dashboard.heroku.com/apps/bimkomi/{API_TOKEN}")
 # Logging setup
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
