@@ -6,13 +6,17 @@ import sqlite3
 import pywhatkit
 import os
 from telegram import Bot
+from datetime import datetime, timedelta
+from telegram import Update
+from telegram.ext import ContextTypes
+import asyncio
 
 
 
 # Telegram API Token
-API_TOKEN = os.getenv("7722019620:AAEYueraVyfFRFQMuY5DBFlNJcVpIwD_iPM")
-bot = Bot(token=API_TOKEN)
-bot.set_webhook(f"https://dashboard.heroku.com/apps/bimkomi/{API_TOKEN}")
+API_TOKEN = "7722019620:AAEYueraVyfFRFQMuY5DBFlNJcVpIwD_iPM"#os.getenv()
+#bot = Bot(token=API_TOKEN)
+#bot.set_webhook(f"https://dashboard.heroku.com/apps/bimkomi/{API_TOKEN}")
 # Logging setup
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -63,7 +67,7 @@ def update_item_status(user_id, item_description, returned=False):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
         [KeyboardButton("📚 השאלת פריט")],
-        [KeyboardButton("🔍 פריט הוחזר")]
+        #[KeyboardButton("🔍 פריט הוחזר")]
     ]
     markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
@@ -107,6 +111,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             [InlineKeyboardButton("📅 אחת לשבוע", callback_data="weekly")],
             [InlineKeyboardButton("📆 אחת לשבועיים", callback_data="biweekly")],
             [InlineKeyboardButton("🗓️ אחת לחודש", callback_data="monthly")],
+            [InlineKeyboardButton("⏱️ עוד 5 דקות", callback_data="5min")],
+            [InlineKeyboardButton("⏱️ עוד 10 דקות", callback_data="10min")],
             [InlineKeyboardButton("🚀 עכשיו", callback_data="now")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -134,6 +140,8 @@ async def handle_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 "weekly": "אחת לשבוע",
                 "biweekly": "אחת לשבועיים",
                 "monthly": "אחת לחודש",
+                 "5min": "עוד 5 דקות",
+                "10min": "עוד 10 דקות",
                 "now": "עכשיו"
             }
             selected_frequency = frequency_map.get(callback_data, "לא נבחרה תדירות")
@@ -199,72 +207,50 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"נשמח לעזור בכל שאלה!\n\n"
                 f"צוות במקומי"
             )
-  
-            # Send WhatsApp reminder
-            await send_whatsapp_reminder(context, update.effective_chat.id, phone_number, reminder_message)
 
-            # Update step after the contact handling
-            context.user_data[user_id]["step"] = "completed"
+                 # Calculate reminder time based on frequency
+            now = datetime.now()
+            if frequency == "5min":
+                reminder_time = now + timedelta(minutes=5)
+            elif frequency == "10min":
+                reminder_time = now + timedelta(minutes=10)
+            elif frequency == "weekly":
+                reminder_time = now + timedelta(weeks=1)
+            elif frequency == "biweekly":
+                reminder_time = now + timedelta(weeks=2)
+            elif frequency == "monthly":
+                reminder_time = now + timedelta(weeks=4)
+            else:
+                reminder_time = now
 
-# Handle item return (Upload item photo)
-async def return_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.message.from_user.id
-    await update.message.reply_text(
-            f"👀 "
-            "אנא העלה את התמונה של הפריט שהחזרת."
+            # Schedule the reminder
+            delay_seconds = (reminder_time - now).total_seconds()
+            logger.info(f"Reminder scheduled in {delay_seconds} seconds (at {reminder_time}).")
+            asyncio.create_task(schedule_reminder(delay_seconds, context, update.effective_chat.id, phone_number, reminder_message))
+
+async def schedule_reminder(delay_seconds, context, chat_id, phone_number, reminder_message):
+    await asyncio.sleep(delay_seconds)
+    await send_whatsapp_reminder(context, chat_id, phone_number, reminder_message)
+
+async def send_whatsapp_reminder(context: ContextTypes.DEFAULT_TYPE, chat_id: int, phone_number: str, reminder_message: str) -> None:
+    try:
+        pywhatkit.sendwhatmsg_instantly(
+            phone_no=phone_number,
+            message=reminder_message,
+            tab_close=True
         )
-    context.user_data[user_id]["step"] = "return_started"
-    photo_id, item_description = item
-        
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="✔️ הודעת התזכורת נשלחה בהצלחה דרך WhatsApp!"
+        )
+    except Exception as e:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ אירעה שגיאה בעת שליחת הודעת התזכורת."
+        )
+        logger.error(f"Error sending WhatsApp message: {e}")
     
-    # Search for borrowed items
-    conn = sqlite3.connect("borrow_reminders.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT photo_id, item_description FROM items WHERE user_id = ? AND status = 'borrowed'", (user_id,))
-    item = cursor.fetchone()
-    conn.close()
-
-    if item:
-        photo_id, item_description = item
-        await update.message.reply_text(
-            f"👀 הנה התמונה של הפריט '{item_description}' שהשאלת:\n"
-            "אנא העלה את התמונה של הפריט שהחזרת."
-        )
-        await update.message.reply_photo(photo_id)
-    else:
-        await update.message.reply_text(
-            "⚠️ לא הצלחנו למצוא את הפריט שהשאלת. ייתכן שלא שמרנו את התמונה. אנא שלח לנו את שם הפריט שהחזרת."
-        )
-
-
-# Handle the photo upload for item return
-async def handle_photo_for_return(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.message.from_user.id
-    if context.user_data[user_id].get("step") == "return_started":
-        uploaded_photo_id = update.message.photo[-1].file_id
-
-        # Compare uploaded photo with saved item photo
-        conn = sqlite3.connect("borrow_reminders.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT item_description FROM items WHERE user_id = ? AND photo_id = ?", (user_id, uploaded_photo_id))
-        item = cursor.fetchone()
-        conn.close()
-
-        if item:
-            item_description = item[0]
-            update_item_status(user_id, item_description, returned=True)
-
-            await update.message.reply_text(
-                f"✔️ הפריט '{item_description}' הוחזר בהצלחה!\n\n"
-                "תודה על העדכון! תזכורות ההחזרה עבור פריט זה לא יישלחו יותר. אם יש פריטים אחרים להחזיר, "
-                "תוכל לשלוח הודעה נוספת בכל עת."
-            )
-        
-        else:
-            await update.message.reply_text(
-                "⚠️ לא הצלחנו לזהות את הפריט שהתמונה שלך תואמת אליו. אנא וודא שהעלית את התמונה הנכונה."
-            )
-
+# Handle item return (Upload item photo
 # WhatsApp reminder
 async def send_whatsapp_reminder(context, chat_id, phone_number, reminder_message):
     pywhatkit.sendwhatmsg_instantly(phone_number, reminder_message, 10, True)
@@ -281,7 +267,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT, handle_text))
     application.add_handler(CallbackQueryHandler(handle_frequency))
     application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
-    application.add_handler(MessageHandler(filters.Regex("🔍 פריט הוחזר"), return_item))
+    #application.add_handler(MessageHandler(filters.Regex("🔍 פריט הוחזר"), return_item))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     application.run_polling()
